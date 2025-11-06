@@ -4,55 +4,49 @@ import json
 import ollama
 import re
 
-st.set_page_config(page_title="CV Parser with Ollama (Optimized)", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="CV Parser with Ollama (Fixed)", page_icon="🧠", layout="wide")
+st.title("CV Parser using Local LLM (Ollama)")
 
-st.title("CV Parser using Local LLM (Ollama, Optimized)")
+st.markdown("Upload a PDF CV and extract structured info locally (Skills, Education, Projects, etc.)")
 
-st.markdown("""
-Upload a PDF CV and let a local LLM (Ollama) extract structured data — Skills, Education, Projects, and more!  
-This version supports **chunked processing** for speed and **automatic aggregation** of all extracted sections.
-""")
-
-# -------------------------------
+# -----------------------------
 # PDF TEXT EXTRACTION
-# -------------------------------
+# -----------------------------
 def extract_text_from_pdf(pdf_file):
-    """Extracts full text from a PDF file."""
     text = ""
     with fitz.open(stream=pdf_file.read(), filetype="pdf") as doc:
         for page in doc:
-            text += page.get_text("text")
+            text += page.get_text("text") + "\n"
+    # Clean up common formatting noise
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
-# -------------------------------
-# CHUNKING LOGIC
-# -------------------------------
-def chunk_text(text, max_length=3000):
-    """Split CV text into smaller chunks for faster LLM processing."""
-    sentences = re.split(r'(?<=[.!?]) +', text)
-    chunks, current_chunk = [], ""
+# -----------------------------
+# JSON EXTRACTION HELPERS
+# -----------------------------
+def extract_json_from_text(text):
+    """Try to extract JSON-like text even if model response is messy."""
+    json_match = re.search(r'\{.*\}', text, re.DOTALL)
+    if json_match:
+        json_str = json_match.group(0)
+        try:
+            return json.loads(json_str)
+        except:
+            try:
+                # try cleaning extra commas or trailing text
+                json_str = re.sub(r',\s*([\]}])', r'\1', json_str)
+                return json.loads(json_str)
+            except:
+                return {}
+    return {}
 
-    for sentence in sentences:
-        if len(current_chunk) + len(sentence) < max_length:
-            current_chunk += sentence + " "
-        else:
-            chunks.append(current_chunk.strip())
-            current_chunk = sentence + " "
-    if current_chunk:
-        chunks.append(current_chunk.strip())
-
-    return chunks
-
-# -------------------------------
+# -----------------------------
 # OLLAMA ANALYSIS
-# -------------------------------
-def analyze_cv_chunk(cv_chunk):
-    """Analyzes one CV chunk with Ollama."""
+# -----------------------------
+def analyze_cv_with_ollama(cv_text):
     prompt = f"""
 You are an expert CV parser. 
-Extract structured JSON **only** from this CV portion.
-
-The JSON MUST follow this schema:
+Extract and return **only valid JSON** with the following schema:
 {{
   "name": "",
   "contact": "",
@@ -64,91 +58,58 @@ The JSON MUST follow this schema:
   "certifications": []
 }}
 
-Text:
-\"\"\"{cv_chunk}\"\"\"
+Guidelines:
+- Fill all applicable fields.
+- Aggregate all **skills** and **projects** across the CV.
+- No markdown, no text outside JSON.
+- Ensure the JSON is syntactically correct.
 
-Return ONLY the JSON (no explanations, no markdown).
+CV Text:
+\"\"\"{cv_text}\"\"\"
+Return only JSON.
 """
-    response = ollama.chat(model="phi", messages=[
-        {"role": "user", "content": prompt}
-    ])
+
+    response = ollama.chat(model="mistral", messages=[{"role": "user", "content": prompt}])
     content = response["message"]["content"]
 
-    try:
-        json_str = content[content.find("{"):content.rfind("}") + 1]
-        parsed_json = json.loads(json_str)
-    except:
-        parsed_json = {}
+    parsed_json = extract_json_from_text(content)
+
+    # Debugging info if output empty
+    if not parsed_json or all(v == "" or v == [] for v in parsed_json.values()):
+        st.warning("Model returned empty JSON. Displaying raw response for debugging:")
+        st.code(content[:1000])
+    
     return parsed_json
 
-# -------------------------------
-# MERGING LOGIC
-# -------------------------------
-def merge_results(results):
-    """Merge multiple chunk results into one aggregated JSON."""
-    merged = {
-        "name": "",
-        "contact": "",
-        "summary": "",
-        "education": [],
-        "experience": [],
-        "projects": [],
-        "skills": [],
-        "certifications": []
-    }
-
-    for r in results:
-        if not r:
-            continue
-        for key, value in r.items():
-            if isinstance(value, list):
-                merged[key].extend(value)
-            elif isinstance(value, str) and value.strip():
-                # prefer first non-empty
-                if not merged[key]:
-                    merged[key] = value.strip()
-
-    # remove duplicates in list-type fields
-    for key in ["education", "experience", "projects", "skills", "certifications"]:
-        merged[key] = list({json.dumps(i, sort_keys=True) if isinstance(i, dict) else i for i in merged[key]})
-        merged[key] = [json.loads(i) if i.startswith("{") else i for i in merged[key]]
-
-    return merged
-
-# -------------------------------
-# MAIN APP
-# -------------------------------
-uploaded_file = st.file_uploader("Upload your CV (PDF)", type=["pdf"])
+# -----------------------------
+# STREAMLIT UI
+# -----------------------------
+uploaded_file = st.file_uploader("Upload CV (PDF)", type=["pdf"])
 
 if uploaded_file:
     with st.spinner("Extracting text from PDF..."):
         text = extract_text_from_pdf(uploaded_file)
+    
+    st.subheader("Extracted CV Text (Preview)")
+    st.text_area("Extracted Text", text[:2000] + ("..." if len(text) > 2000 else ""), height=250)
 
-    st.subheader("Extracted Text (Preview)")
-    st.text_area("Extracted CV Text", text[:2000] + ("..." if len(text) > 2000 else ""), height=300)
+    if st.button("Analyze with Ollama"):
+        with st.spinner("Analyzing CV... This may take a few seconds ⏳"):
+            result = analyze_cv_with_ollama(text)
+        
+        if result:
+            st.success("CV Parsed Successfully!")
+            st.json(result)
 
-    if st.button(" Analyze with Ollama"):
-        chunks = chunk_text(text)
-        st.write(f"Detected {len(chunks)} chunks for processing ")
-
-        results = []
-        for i, chunk in enumerate(chunks):
-            st.write(f"Analyzing chunk {i+1}/{len(chunks)}...")
-            result = analyze_cv_chunk(chunk)
-            results.append(result)
-
-        final_result = merge_results(results)
-
-        st.success("CV Parsed Successfully!")
-        st.json(final_result)
-
-        # Allow user to download the JSON result
-        json_str = json.dumps(final_result, indent=4, ensure_ascii=False)
-        st.download_button(
-            label="Download Aggregated JSON",
-            data=json_str,
-            file_name="cv_parsed_aggregated.json",
-            mime="application/json"
-        )
+            # JSON Download
+            json_str = json.dumps(result, indent=4, ensure_ascii=False)
+            st.download_button(
+                label="Download JSON",
+                data=json_str,
+                file_name="cv_parsed.json",
+                mime="application/json"
+            )
+        else:
+            st.error("Could not extract structured data. Try a smaller CV or clearer text.")
 else:
-    st.info("Upload a PDF CV to start parsing.")
+    st.info("Upload a PDF CV to start.")
