@@ -1,3 +1,5 @@
+# streamlit run ai-features/A.%20CV%20Parsing%20%26%20Section%20Detection/app_slm_trial.py
+
 import streamlit as st
 import fitz  # PyMuPDF
 import json

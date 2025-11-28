@@ -1,45 +1,90 @@
-import openai
-import os
+# streamlit run resume_polish.py
 
-# openai.api_key will be read from environment in normal execution
-openai.api_key = os.getenv("OPENAI_API_KEY", "your-openai-api-key-here")
+import streamlit as st
+import ollama
+import re
+
+st.set_page_config(page_title="Resume Bullet Polisher (Local LLM)", page_icon="📝", layout="wide")
+st.title("Resume Bullet Point Polisher using Local LLM (Ollama)")
+
+st.markdown("Rewrite resume bullet points to be more professional, achievement-oriented, and powerful—locally using Ollama.")
 
 def build_system_prompt():
     return """
-[SYSTEM PROMPT]
+You are a Career Coach and an expert Resume Writer.
 
-👤 You are a Career Coach and an expert Resume Writer.
+Your task is to take a bullet point from a user's resume and rewrite it to be 
+more professional, powerful, and achievement-oriented.
 
-🎯 Your task is to take a bullet point from a user's resume and rewrite it to be more professional, powerful, and achievement-oriented.
+Rules:
+1. Start the sentence with a strong Action Verb in past tense 
+   (e.g., Developed, Led, Implemented).
+2. Apply STAR or PAR structure when possible.
+3. Preserve original meaning — do NOT add new information.
+4. Keep it concise.
+5. Return ONLY the polished sentence, with no explanation.
 
-📝 Rules you must follow:
-1.  Start the sentence with a strong "Action Verb" in the past tense.
-2.  Use STAR or PAR method where possible; quantify results if available.
-3.  Preserve the original meaning and keep the rewrite concise.
-4.  Return ONLY the polished sentence.
+Training Examples:
+Original: "I was in charge of customer support."
+Polished: "Provided technical support to over 50 customers daily, resolving 95% of inquiries during first contact."
+
+Original: "I made some social media posts."
+Polished: "Managed the company's social media accounts, increasing audience engagement by 15% over 3 months."
 """
 
+def extract_polished_text(raw_output):
+    """
+    Remove quotes, markdown, and extra whitespace.
+    """
+    cleaned = raw_output.strip()
+    cleaned = cleaned.replace('"', '').replace("'", "")
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    return cleaned.strip()
 
-def polish_resume_sentence_v2(user_bullet_point: str) -> str:
+def polish_with_ollama(bullet_point):
     system_prompt = build_system_prompt()
-    user_prompt = f"""
+
+    prompt = f"""
+[SYSTEM]
+{system_prompt}
+
 [USER INPUT]
-Original: {user_bullet_point}
+Original: {bullet_point}
 Polished:
 """
-    try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            temperature=0.3,
-            max_tokens=100
+
+    response = ollama.chat(
+        model="mistral",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    raw = response["message"]["content"]
+    return extract_polished_text(raw)
+
+st.subheader("Enter a resume bullet point")
+
+user_input = st.text_area(
+    "Your Resume Bullet Point",
+    placeholder="Example: I fixed bugs in the backend API and improved performance.",
+    height=120
+)
+
+if st.button("Polish Bullet Point"):
+    if not user_input.strip():
+        st.error("Please enter a bullet point first.")
+    else:
+        with st.spinner("Polishing using local LLM… ✨"):
+            polished = polish_with_ollama(user_input)
+
+        st.success("Polished Successfully!")
+        st.write("### Polished Bullet")
+        st.code(polished, language="markdown")
+
+        st.download_button(
+            label="Download Polished Bullet",
+            data=polished,
+            file_name="polished_bullet.txt",
+            mime="text/plain"
         )
-        polished = response.choices[0].message['content'].strip()
-        return polished
-    except Exception as e:
-        return f"Error: Could not polish sentence. {e}"
-
-
-if __name__ == "__main__":
-    test_sentence_1 = "I made some social media posts."
-    print(polish_resume_sentence_v2(test_sentence_1))
+else:
+    st.info("Enter a bullet point above and click **Polish Bullet Point**.")
