@@ -1,0 +1,8 @@
+streamlit
+pymupdf
+ollama
+python-dotenv
+requests
+jinja2
+numpy
+pandas
