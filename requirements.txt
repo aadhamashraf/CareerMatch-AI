@@ -1,5 +1,5 @@
 streamlit
-pymupdf
+PyMuPDF
 ollama
 python-dotenv
 requests
